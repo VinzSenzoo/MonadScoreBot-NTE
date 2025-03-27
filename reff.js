@@ -88,7 +88,7 @@ async function main() {
       {
         type: 'input',
         name: 'count',
-        message: 'Masukkan jumlah akun: ',
+        message: 'Input Jumlah Refferal Yang Diinginkan: ',
         validate: (value) => {
           const parsed = parseInt(value, 10);
           if (isNaN(parsed) || parsed <= 0) {
