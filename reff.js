@@ -3,8 +3,7 @@ import ora from 'ora';
 import chalk from 'chalk';
 import fs from 'fs';
 import axios from 'axios';
-import pkg from 'https-proxy-agent';
-const { HttpsProxyAgent } = pkg;
+import { HttpsProxyAgent } from 'https-proxy-agent';
 import cfonts from 'cfonts';
 import { ethers } from 'ethers';
 
@@ -34,9 +33,18 @@ function generateRandomHeaders() {
   return {
     'User-Agent': randomUserAgent,
     'Accept': 'application/json, text/plain, */*',
-    'Accept-Language': 'en-US,en;q=0.9'
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Host': 'mscore.onrender.com',
+    'Origin': 'https://monadscore.xyz',
+    'Referer': 'https://monadscore.xyz/',
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'cross-site',
+    'TE': 'trailers'
+
   };
 }
+
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -88,7 +96,7 @@ async function main() {
       {
         type: 'input',
         name: 'count',
-        message: 'Input Jumlah Refferal Yang Diinginkan: ',
+        message: 'Masukkan jumlah akun: ',
         validate: (value) => {
           const parsed = parseInt(value, 10);
           if (isNaN(parsed) || parsed <= 0) {
@@ -154,16 +162,29 @@ async function main() {
       accountAxiosConfig.httpAgent = agent;
       accountAxiosConfig.httpsAgent = agent;
     }
+    
+   let ipifyAxiosConfig = {
+      timeout: 50000,
+      headers: {
+        'Accept': 'application/json, text/plain, */*',
+        'User-Agent': 'Mozilla/5.0'
+      },
+      proxy: accountAxiosConfig.proxy,
+      httpAgent: accountAxiosConfig.httpAgent,
+      httpsAgent: accountAxiosConfig.httpsAgent
+    };
+    
 
     let accountIP = '';
     try {
-      const ipResponse = await axios.get('https://api.ipify.org?format=json', accountAxiosConfig);
-      accountIP = ipResponse.data.ip;
+      const ipResponse = await axios.get('https://api.ipify.org?format=json', ipifyAxiosConfig);
+      const data = typeof ipResponse.data === 'string' ? JSON.parse(ipResponse.data) : ipResponse.data;
+      accountIP = data.ip;
     } catch (error) {
-      accountIP = "Gagal mendapatkan IP";
-      console.error("Error saat mendapatkan IP:", error.message);
-    }
-    console.log(chalk.white(`IP Yang Digunakan: ${accountIP}\n`));
+     accountIP = "Gagal mendapatkan IP";
+     console.error("Error saat mendapatkan IP:", error.message);
+   }
+     console.log(chalk.white(`IP Yang Digunakan: ${accountIP}\n`))
 
     const wallet = ethers.Wallet.createRandom();
     const walletAddress = wallet.address;
