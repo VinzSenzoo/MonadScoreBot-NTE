@@ -1,4 +1,3 @@
-import fs from 'fs/promises';
 import axios from 'axios';
 import cfonts from 'cfonts';
 import chalk from 'chalk';
@@ -7,6 +6,7 @@ import readline from 'readline';
 import { Wallet } from 'ethers';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
+import fs from 'fs/promises';
 
 function delay(seconds) {
   return new Promise(resolve => setTimeout(resolve, seconds * 1000));
@@ -30,19 +30,23 @@ function getRandomUserAgent() {
   return userAgents[Math.floor(Math.random() * userAgents.length)];
 }
 
-function getHeaders() {
-  return {
+function getHeaders(token = null) {
+  const headers = {
     'User-Agent': getRandomUserAgent(),
     'Accept': 'application/json, text/plain, */*',
     'Content-Type': 'application/json',
-    'origin': 'https://monadscore.xyz',
-    'referer': 'https://monadscore.xyz/'
+    'Origin': 'https://monadscore.xyz',
+    'Referer': 'https://monadscore.xyz/'
   };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
 }
 
-function getAxiosConfig(proxy) {
+function getAxiosConfig(proxy, token = null) {
   const config = {
-    headers: getHeaders(),
+    headers: getHeaders(token),
     timeout: 60000
   };
   if (proxy) {
@@ -52,7 +56,7 @@ function getAxiosConfig(proxy) {
 }
 
 function newAgent(proxy) {
-  if (proxy.startsWith('http://')) {
+  if (proxy.startsWith('http://') || proxy.startsWith('https://')) {
     return new HttpsProxyAgent(proxy);
   } else if (proxy.startsWith('socks4://') || proxy.startsWith('socks5://')) {
     return new SocksProxyAgent(proxy);
@@ -124,32 +128,46 @@ async function getPublicIP(proxy) {
   }
 }
 
-async function claimTask(walletAddress, taskId, proxy) {
+async function getInitialToken(walletAddress, proxy) {
+  const url = 'https://mscore.onrender.com/user';
+  const payload = { wallet: walletAddress, invite: null };
+  const response = await requestWithRetry('post', url, payload, getAxiosConfig(proxy));
+  return response.data.token;
+}
+
+async function loginUser(walletAddress, proxy, initialToken) {
+  const url = 'https://mscore.onrender.com/user/login';
+  const payload = { wallet: walletAddress };
+  const response = await requestWithRetry('post', url, payload, getAxiosConfig(proxy, initialToken));
+  return response.data.token;
+}
+
+async function claimTask(walletAddress, taskId, proxy, token) {
   const url = 'https://mscore.onrender.com/user/claim-task';
   const payload = { wallet: walletAddress, taskId };
   try {
-    const response = await requestWithRetry('post', url, payload, getAxiosConfig(proxy));
+    const response = await requestWithRetry('post', url, payload, getAxiosConfig(proxy, token));
     return response.data && response.data.message
       ? response.data.message
       : 'Task claim berhasil, tetapi tidak ada pesan dari server.';
   } catch (error) {
-    return `Task ${taskId} gagal: ${error.response?.data?.message || error.message}`;
+    return `Claiming Task ${taskId} gagal: ${error.response?.data?.message || error.message}`;
   }
 }
 
-async function updateStartTime(walletAddress, proxy) {
+async function updateStartTime(walletAddress, proxy, token) {
   const url = 'https://mscore.onrender.com/user/update-start-time';
   const payload = { wallet: walletAddress, startTime: Date.now() };
   try {
-    const response = await requestWithRetry('put', url, payload, getAxiosConfig(proxy));
-    const message = response.data && response.data.message ? response.data.message : 'Start node berhasil';
+    const response = await requestWithRetry('put', url, payload, getAxiosConfig(proxy, token));
+    const message = response.data && response.data.message ? response.data.message : 'Start node Successfuly';
     const totalPoints =
       response.data && response.data.user && response.data.user.totalPoints !== undefined
         ? response.data.user.totalPoints
-        : 'Tidak diketahui';
+        : 'Unknown';
     return { message, totalPoints };
   } catch (error) {
-    const message = `Start node gagal: ${error.response?.data?.message || error.message}`;
+    const message = `Start node Failed: ${error.response?.data?.message || error.message}`;
     const totalPoints =
       error.response && error.response.data && error.response.data.user && error.response.data.user.totalPoints !== undefined
         ? error.response.data.user.totalPoints
@@ -172,30 +190,57 @@ async function processAccount(account, index, total, proxy) {
   try {
     wallet = new Wallet(privateKey);
   } catch (error) {
-    console.error(chalk.red(`Error membuat wallet: ${error.message}`));
+    console.error(chalk.red(` Error : ${error.message}`));
+    return;
+  }
+
+  const spinnerAuth = ora({ text: ' Melakukan autentikasi...', spinner: 'dots2', color: 'cyan' }).start();
+  let loginToken;
+  try {
+    const initialToken = await getInitialToken(walletAddress, proxy);
+    spinnerAuth.text = ' Melakukan Sign Wallet.';
+    await delay(0.5);
+
+    const signMessage = `Request from
+
+monadscore.xyz
+
+Message
+
+Sign this message to verify ownership and continue to dashboard!
+
+${walletAddress}`;
+    await wallet.signMessage(signMessage);
+    spinnerAuth.text = 'Sign Success.';
+    await delay(0.5);
+
+    loginToken = await loginUser(walletAddress, proxy, initialToken);
+    spinnerAuth.succeed(chalk.greenBright(' Autentikasi Berhasil'));
+  } catch (error) {
+    spinnerAuth.fail(chalk.redBright(` Autentikasi gagal: ${error.message}`));
     return;
   }
 
   const tasks = ['task003', 'task002', 'task001'];
   for (let i = 0; i < tasks.length; i++) {
     const spinnerTask = ora({ text: `Claiming Task ${i + 1}/3 ...`, spinner: 'dots2', color: 'cyan' }).start();
-    const msg = await claimTask(walletAddress, tasks[i], proxy);
+    const msg = await claimTask(walletAddress, tasks[i], proxy, loginToken);
     if (msg.toLowerCase().includes('successfully') || msg.toLowerCase().includes('berhasil')) {
-      spinnerTask.succeed(chalk.greenBright(` Claiming Task ${i + 1}/3: ${msg}`));
+      spinnerTask.succeed(chalk.greenBright(` Claiming Task ${i + 1}/3 berhasil`));
     } else {
-      spinnerTask.fail(chalk.red(` Claiming Task ${i + 1}/3: ${msg}`));
+      spinnerTask.fail(chalk.redBright(` ${msg}`));
     }
   }
 
   const spinnerStart = ora({ text: 'Starting Node...', spinner: 'dots2', color: 'cyan' }).start();
-  const { message, totalPoints } = await updateStartTime(walletAddress, proxy);
+  const { message, totalPoints } = await updateStartTime(walletAddress, proxy, loginToken);
   if (message.toLowerCase().includes('successfully') || message.toLowerCase().includes('berhasil')) {
     spinnerStart.succeed(chalk.greenBright(` Start Node Berhasil : ${message}`));
   } else {
     spinnerStart.fail(chalk.red(` Start Node Failed : ${message}`));
   }
 
-  const spinnerPoints = ora({ text: 'Get Total Points ...', spinner: 'dots2', color: 'cyan' }).start();
+  const spinnerPoints = ora({ text: 'Mengambil Total Points...', spinner: 'dots2', color: 'cyan' }).start();
   spinnerPoints.succeed(chalk.greenBright(` Total Points : ${totalPoints}`));
 }
 
@@ -250,7 +295,7 @@ async function run() {
     }
   }
 
-  console.log(chalk.magentaBright('Auto Start Node selesai. Menunggu 24 jam sebelum pengulangan...'));
+  console.log(chalk.magentaBright('Siklus selesai. Menunggu 24 jam sebelum pengulangan...'));
   await delay(86400);
   run();
 }
